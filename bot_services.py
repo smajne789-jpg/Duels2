@@ -87,7 +87,7 @@ class Config:
             min_room_amount=float(os.getenv("MIN_ROOM_AMOUNT", "0.05")),
             min_deposit_amount=float(os.getenv("MIN_DEPOSIT_AMOUNT", "0.05")),
             min_withdraw_amount=float(os.getenv("MIN_WITHDRAW_AMOUNT", "0.05")),
-            house_commission_percent=float(os.getenv("HOUSE_COMMISSION_PERCENT", "1")),
+            house_commission_percent=float(os.getenv("HOUSE_COMMISSION_PERCENT", "5")),
             referral_percent=float(os.getenv("REFERRAL_PERCENT", "0.01")),
         )
 
