@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import re
 import secrets
 from dataclasses import dataclass
@@ -59,6 +60,15 @@ PREMIUM_EMOJI_IDS = {
     "profile_ref_income": "5330320040883411678",
     "profile_ref_count": "5217822164362739968",
     "game_menu_title": "5399909394525737759",
+    "bets_button": "5890971177484029249",
+    "bet_product_button": "5890934648787176897",
+    "bet_odd_button": "5890934648787176897",
+    "bet_even_button": "5890934648787176897",
+    "dice_button": "5890934648787176897",
+    "stats_title": "5230974475209554508",
+    "stats_deposit": "5472427031100667803",
+    "stats_withdraw": "5230974475209554508",
+    "stats_result": "5271912827869737544",
 }
 PREMIUM_TEXT_EMOJI_SLOTS = {
     "✨": "main_menu",
@@ -170,6 +180,9 @@ class UserStates(StatesGroup):
     deposit_amount = State()
     withdraw_amount = State()
     room_amount = State()
+    bet_product_amount = State()
+    bet_double_odd_amount = State()
+    bet_double_even_amount = State()
     default_room_amount = State()
     user_check_password = State()
     admin_check_main = State()
@@ -182,8 +195,10 @@ class UserStates(StatesGroup):
     admin_house_commission = State()
     admin_broadcast = State()
     admin_min_room = State()
+    admin_min_bet = State()
     admin_min_deposit = State()
     admin_min_withdraw = State()
+    admin_withdraw_required_deposit = State()
     admin_ref_percent = State()
     admin_add_admin = State()
     admin_add_balance = State()
@@ -263,6 +278,29 @@ def game_menu_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Создать комнату", callback_data="room:create", icon_custom_emoji_id=premium_button_icon("create_room_button"))
     builder.button(text="Список комнат", callback_data="rooms:list", icon_custom_emoji_id=premium_button_icon("rooms_button"))
     builder.button(text="Мои комнаты", callback_data="rooms:mine", icon_custom_emoji_id=premium_button_icon("my_rooms_button"))
+    builder.button(text="Ставки", callback_data="bets:open", icon_custom_emoji_id=premium_button_icon("bets_button"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def bets_menu_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Куб x4.5 • произведение > 18",
+        callback_data="bet:product",
+        icon_custom_emoji_id=premium_button_icon("bet_product_button"),
+    )
+    builder.button(
+        text="Куб x3 • оба нечёт",
+        callback_data="bet:double_odd",
+        icon_custom_emoji_id=premium_button_icon("bet_odd_button"),
+    )
+    builder.button(
+        text="Куб x3 • оба чёт",
+        callback_data="bet:double_even",
+        icon_custom_emoji_id=premium_button_icon("bet_even_button"),
+    )
+    builder.button(text="Назад", callback_data="game:open", icon_custom_emoji_id=premium_button_icon("back_button"))
     builder.adjust(1)
     return builder.as_markup()
 
@@ -272,7 +310,8 @@ def profile_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Пополнить", callback_data="profile:deposit", icon_custom_emoji_id=premium_button_icon("deposit_button"))
     builder.button(text="Вывести", callback_data="profile:withdraw", icon_custom_emoji_id=premium_button_icon("withdraw_button"))
     builder.button(text="Рефералы", callback_data="profile:referrals", icon_custom_emoji_id=premium_button_icon("refs_button"))
-    builder.adjust(2, 1)
+    builder.button(text="Статистика", callback_data="profile:stats", icon_custom_emoji_id=premium_button_icon("stats_title"))
+    builder.adjust(2, 2)
     return builder.as_markup()
 
 
@@ -321,8 +360,10 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Рассылка", callback_data="admin:broadcast", icon_custom_emoji_id=premium_button_icon("log"))
     builder.button(text="Топ рефов", callback_data="admin:refs_top", icon_custom_emoji_id=premium_button_icon("win"))
     builder.button(text="Мин. ставка комнаты", callback_data="admin:min_room", icon_custom_emoji_id=premium_button_icon("main_menu"))
+    builder.button(text="Мин. ставка ставок", callback_data="admin:min_bet", icon_custom_emoji_id=premium_button_icon("bets_button"))
     builder.button(text="Мин. пополнение", callback_data="admin:min_deposit", icon_custom_emoji_id=premium_button_icon("deposit"))
     builder.button(text="Мин. вывод", callback_data="admin:min_withdraw", icon_custom_emoji_id=premium_button_icon("withdraw"))
+    builder.button(text="Депозит для вывода", callback_data="admin:withdraw_required_deposit", icon_custom_emoji_id=premium_button_icon("deposit"))
     builder.button(text="Реф. процент", callback_data="admin:ref_percent", icon_custom_emoji_id=premium_button_icon("profile"))
     builder.button(text="Добавить админа", callback_data="admin:add_admin", icon_custom_emoji_id=premium_button_icon("log"))
     builder.button(text="Выдать баланс", callback_data="admin:add_balance", icon_custom_emoji_id=premium_button_icon("deposit"))
@@ -400,6 +441,25 @@ async def render_profile(user_id: int) -> str:
     )
 
 
+async def render_user_stats(user_id: int) -> str:
+    user = await db.get_user(user_id)
+    if not user:
+        return f"{premium_emoji('stats_title', '📊')} <b>Ваша статистика</b>\n\nПрофиль не найден."
+
+    total_deposit = float(user["total_deposit"])
+    total_withdraw = float(user["total_withdraw"])
+    balance = float(user["balance"])
+    net_result = round(balance + total_withdraw - total_deposit, 8)
+    result_label = "в плюсе" if net_result >= 0 else "в минусе"
+
+    return (
+        f"{premium_emoji('stats_title', '📊')} <b>Ваша статистика</b>\n\n"
+        f"{premium_emoji('stats_deposit', '💳')} Пополнений: <b>{fmt_amount(total_deposit)} {config.bot_asset}</b>\n"
+        f"{premium_emoji('stats_withdraw', '💸')} Выводов: <b>{fmt_amount(total_withdraw)} {config.bot_asset}</b>\n"
+        f"{premium_emoji('stats_result', '📈')} Вы {result_label} на: <b>{fmt_amount(abs(net_result))} {config.bot_asset}</b>"
+    )
+
+
 async def show_main_menu(message: Message) -> None:
     is_admin = await db.is_admin(message.from_user.id)
     text = (
@@ -424,6 +484,7 @@ async def show_game_menu(target: Message | CallbackQuery) -> None:
     text = (
         f"{premium_emoji('game_menu_title', '🎲')} <b>Игровое меню</b>\n\n"
         f"{premium_emoji('main_menu', '🔥')} Создавайте комнаты, заходите в чужие и играйте на реальные кубики Telegram.\n"
+        f"{premium_emoji('bets_button', '🎯')} Откройте раздел ставок и запускайте быстрые игры на двух кубах.\n"
         f"{premium_emoji('log', '💼')} Комиссия проекта: <b>{fmt_amount(await db.get_setting_float('house_commission_percent', config.house_commission_percent))}%</b>."
     )
     if isinstance(target, CallbackQuery):
@@ -431,6 +492,25 @@ async def show_game_menu(target: Message | CallbackQuery) -> None:
         await target.answer()
     else:
         await target.answer(text, reply_markup=game_menu_keyboard())
+
+
+async def get_min_bet_amount() -> float:
+    return await db.get_setting_float("min_bet_amount", config.min_room_amount)
+
+
+async def show_bets_menu(target: Message | CallbackQuery) -> None:
+    minimum = await get_min_bet_amount()
+    text = (
+        f"{premium_emoji('bets_button', '🎯')} <b>Ставки на кубы</b>\n\n"
+        f"{premium_emoji('dice_button', '🎲')} <b>Куб x4.5</b> — бросаются два куба, победа если произведение больше <b>18</b>.\n"
+        f"{premium_emoji('dice_button', '🎲')} <b>Куб x3</b> — отдельные режимы на два нечётных или два чётных значения.\n"
+        f"{premium_emoji('deposit', '💳')} Минимальная ставка: <b>{fmt_amount(minimum)} {config.bot_asset}</b>."
+    )
+    if isinstance(target, CallbackQuery):
+        await safe_edit(target.message, text, reply_markup=bets_menu_keyboard())
+        await target.answer()
+    else:
+        await target.answer(text, reply_markup=bets_menu_keyboard())
 
 
 async def show_profile(target: Message | CallbackQuery) -> None:
@@ -447,7 +527,7 @@ async def show_admin_panel(target: Message | CallbackQuery) -> None:
     text = (
         "🛡 <b>Админ-панель</b>\n\n"
         f"👮 Администраторов: <b>{len(admins)}</b>\n"
-        "⚙️ Управление чеками, лимитами, админами, балансами, подпиской и логами."
+        "⚙️ Управление чеками, лимитами, ставками, админами, балансами, подпиской и логами."
     )
     if isinstance(target, CallbackQuery):
         await safe_edit(target.message, text, reply_markup=admin_keyboard())
@@ -506,16 +586,23 @@ async def send_gift_check_subscription_prompt(message: Message, gift_check: Any,
 
 async def render_withdraw_mode_text() -> str:
     auto_enabled = await db.get_setting("withdraw_auto_enabled", "1")
+    required_deposit = await db.get_setting_float("withdraw_required_deposit", 0.0)
     mode_label = "авто-вывод включен" if auto_enabled == "1" else "ручная модерация включена"
     description = (
         "Заявки сразу уходят пользователю готовым чеком."
         if auto_enabled == "1"
         else "Новые заявки уходят в лог-чат, где админ может одобрить или отклонить вывод."
     )
+    deposit_rule = (
+        f"Для вывода нужен суммарный депозит: <b>{fmt_amount(required_deposit)} {config.bot_asset}</b>."
+        if required_deposit > 0
+        else "Для вывода депозит не требуется."
+    )
     return (
         f"{premium_emoji('withdraw', '💸')} <b>Режим вывода</b>\n\n"
         f"Текущее состояние: <b>{mode_label}</b>\n"
-        f"{description}"
+        f"{description}\n"
+        f"{premium_emoji('deposit', '💳')} {deposit_rule}"
     )
 
 
@@ -625,6 +712,118 @@ async def roll_duel_round(bot: Bot, creator_id: int, opponent_id: int, room_id: 
     creator_roll = first_roll if first_role_key == "creator" else second_roll
     opponent_roll = first_roll if first_role_key == "opponent" else second_roll
     return creator_roll, opponent_roll
+
+
+async def roll_two_dice_for_user(bot: Bot, user_id: int, title: str) -> tuple[int, int]:
+    await bot.send_message(
+        user_id,
+        f"{premium_emoji('dice_button', '🎲')} <b>{title}</b>\n\n"
+        "Сейчас будут два реальных кубика Telegram.",
+    )
+    first_message = await bot.send_dice(user_id, emoji="🎲")
+    await asyncio.sleep(2)
+    second_message = await bot.send_dice(user_id, emoji="🎲")
+    return int(first_message.dice.value), int(second_message.dice.value)
+
+
+def render_bet_result_text(
+    title: str,
+    amount: float,
+    multiplier: float,
+    first_roll: int,
+    second_roll: int,
+    details: str,
+    won: bool,
+    payout: float,
+    balance: float,
+) -> str:
+    status = f"{premium_emoji('win', '🏆')} <b>Ставка сыграла</b>" if won else f"{premium_emoji('lose', '❌')} <b>Ставка проиграла</b>"
+    return (
+        f"{premium_emoji('bets_button', '🎯')} <b>{title}</b>\n\n"
+        f"{status}\n"
+        f"{premium_emoji('dice_button', '🎲')} Кубики: <b>{first_roll}</b> и <b>{second_roll}</b>\n"
+        f"{premium_emoji('log', '🧾')} Условие: <b>{details}</b>\n"
+        f"{premium_emoji('deposit', '💳')} Ставка: <b>{fmt_amount(amount)} {config.bot_asset}</b>\n"
+        f"{premium_emoji('win', '🏆')} Выплата: <b>{fmt_amount(payout)} {config.bot_asset}</b> (x{fmt_amount(multiplier)})\n"
+        f"{premium_emoji('profile_balance', '💰')} Баланс: <b>{fmt_amount(balance)} {config.bot_asset}</b>"
+    )
+
+
+async def process_stake_bet(
+    message: Message,
+    state: FSMContext,
+    *,
+    minimum: float,
+    title: str,
+    multiplier: float,
+    tx_code: str,
+    win_checker,
+    details_builder,
+) -> None:
+    try:
+        amount = parse_amount(message.text)
+    except Exception:
+        await message.answer("Введите корректную сумму ставки.")
+        return
+    if amount < minimum:
+        await message.answer(f"Минимальная ставка: {fmt_amount(minimum)} {config.bot_asset}")
+        return
+    user = await db.get_user(message.from_user.id)
+    if not user or float(user["balance"]) < amount:
+        await message.answer("Недостаточно средств для ставки.")
+        return
+
+    first_roll, second_roll = await roll_two_dice_for_user(message.bot, message.from_user.id, title)
+    won = bool(win_checker(first_roll, second_roll))
+    payout = round(amount * multiplier, 8) if won else 0.0
+    try:
+        user = await db.settle_stake_bet(
+            message.from_user.id,
+            amount,
+            payout,
+            f"bet_{tx_code}_{'win' if won else 'lose'}",
+            f"{title}: {first_roll}x{second_roll}",
+        )
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+
+    result_text = render_bet_result_text(
+        title=title,
+        amount=amount,
+        multiplier=multiplier,
+        first_roll=first_roll,
+        second_roll=second_roll,
+        details=details_builder(first_roll, second_roll),
+        won=won,
+        payout=payout,
+        balance=float(user["balance"]),
+    )
+    await message.answer(result_text, reply_markup=bets_menu_keyboard())
+    await send_log(
+        message.bot,
+        f"{premium_emoji('bets_button', '🎯')} <b>Ставка {title}</b>\n"
+        f"Игрок: <code>{message.from_user.id}</code>\n"
+        f"Ставка: <b>{fmt_amount(amount)} {config.bot_asset}</b>\n"
+        f"Кубики: <b>{first_roll}</b> и <b>{second_roll}</b>\n"
+        f"Результат: <b>{'win' if won else 'lose'}</b>\n"
+        f"Выплата: <b>{fmt_amount(payout)} {config.bot_asset}</b>",
+    )
+    await state.clear()
+
+
+async def send_broadcast_payload(bot: Bot, user_id: int, source_message: Message) -> None:
+    if source_message.text:
+        await bot.send_message(user_id, source_message.text)
+        return
+    if source_message.photo:
+        await bot.send_photo(
+            user_id,
+            source_message.photo[-1].file_id,
+            caption=source_message.caption or None,
+        )
+        return
+    await bot.copy_message(user_id, source_message.chat.id, source_message.message_id)
 
 
 def gift_check_link(token: str) -> str:
@@ -975,6 +1174,12 @@ async def handle_cancel(message: Message, state: FSMContext) -> None:
     await message.answer("Действие отменено.")
 
 
+@router.message(Command("stats"))
+async def handle_stats(message: Message) -> None:
+    await ensure_registered(message.from_user)
+    await message.answer(await render_user_stats(message.from_user.id))
+
+
 @router.message(F.text == "Играть")
 async def open_game_menu(message: Message) -> None:
     await ensure_registered(message.from_user)
@@ -1016,9 +1221,60 @@ async def cb_open_game(callback: CallbackQuery) -> None:
     await show_game_menu(callback)
 
 
+@router.callback_query(F.data == "bets:open")
+async def cb_open_bets(callback: CallbackQuery) -> None:
+    await show_bets_menu(callback)
+
+
+@router.callback_query(F.data == "bet:product")
+async def cb_bet_product(callback: CallbackQuery, state: FSMContext) -> None:
+    minimum = await get_min_bet_amount()
+    await state.set_state(UserStates.bet_product_amount)
+    await callback.message.answer(
+        f"{premium_emoji('bets_button', '🎯')} <b>Куб x4.5</b>\n\n"
+        "Условие победы: произведение двух кубиков должно быть больше <b>18</b>.\n"
+        f"Минимальная ставка: <b>{fmt_amount(minimum)} {config.bot_asset}</b>\n"
+        "Отправьте сумму одним сообщением."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bet:double_odd")
+async def cb_bet_double_odd(callback: CallbackQuery, state: FSMContext) -> None:
+    minimum = await get_min_bet_amount()
+    await state.set_state(UserStates.bet_double_odd_amount)
+    await callback.message.answer(
+        f"{premium_emoji('bets_button', '🎯')} <b>Куб x3 • оба нечёт</b>\n\n"
+        "Победа, если оба кубика выпадут нечётными.\n"
+        f"Минимальная ставка: <b>{fmt_amount(minimum)} {config.bot_asset}</b>\n"
+        "Отправьте сумму одним сообщением."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bet:double_even")
+async def cb_bet_double_even(callback: CallbackQuery, state: FSMContext) -> None:
+    minimum = await get_min_bet_amount()
+    await state.set_state(UserStates.bet_double_even_amount)
+    await callback.message.answer(
+        f"{premium_emoji('bets_button', '🎯')} <b>Куб x3 • оба чёт</b>\n\n"
+        "Победа, если оба кубика выпадут чётными.\n"
+        f"Минимальная ставка: <b>{fmt_amount(minimum)} {config.bot_asset}</b>\n"
+        "Отправьте сумму одним сообщением."
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "profile:open")
 async def cb_open_profile(callback: CallbackQuery) -> None:
     await show_profile(callback)
+
+
+@router.callback_query(F.data == "profile:stats")
+async def cb_profile_stats(callback: CallbackQuery) -> None:
+    text = await render_user_stats(callback.from_user.id)
+    await safe_edit(callback.message, text, reply_markup=profile_keyboard())
+    await callback.answer()
 
 
 @router.callback_query(F.data == "rooms:list")
@@ -1170,9 +1426,16 @@ async def cb_deposit(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_withdraw(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(UserStates.withdraw_amount)
     minimum = await db.get_setting_float("min_withdraw_amount", config.min_withdraw_amount)
+    required_deposit = await db.get_setting_float("withdraw_required_deposit", 0.0)
+    deposit_line = (
+        f"Нужен суммарный депозит: <b>{fmt_amount(required_deposit)} {config.bot_asset}</b>\n"
+        if required_deposit > 0
+        else "Депозит для вывода не требуется.\n"
+    )
     await callback.message.answer(
         f"{premium_emoji('withdraw', '💸')} <b>Вывод через CryptoBot чек</b>\n\n"
         f"Минимум: <b>{fmt_amount(minimum)} {config.bot_asset}</b>\n"
+        f"{deposit_line}"
         "Отправьте сумму вывода."
     )
     await callback.answer()
@@ -1432,7 +1695,8 @@ async def cb_admin_broadcast(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(UserStates.admin_broadcast)
     await callback.message.answer(
         "📣 <b>Рассылка</b>\n\n"
-        "Отправьте текст рассылки одним сообщением.\n"
+        "Отправьте одно сообщение для рассылки.\n"
+        "Можно текст, фото с подписью или вообще без текста.\n"
         "Сообщение уйдет всем пользователям, которые запускали бота."
     )
     await callback.answer()
@@ -1468,6 +1732,15 @@ async def cb_admin_min_room(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "admin:min_bet")
+async def cb_admin_min_bet(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await callback_admin_guard(callback):
+        return
+    await state.set_state(UserStates.admin_min_bet)
+    await callback.message.answer("Введите новую минимальную сумму для раздела ставок.")
+    await callback.answer()
+
+
 @router.callback_query(F.data == "admin:min_deposit")
 async def cb_admin_min_deposit(callback: CallbackQuery, state: FSMContext) -> None:
     if not await callback_admin_guard(callback):
@@ -1483,6 +1756,19 @@ async def cb_admin_min_withdraw(callback: CallbackQuery, state: FSMContext) -> N
         return
     await state.set_state(UserStates.admin_min_withdraw)
     await callback.message.answer("Введите новую минимальную сумму вывода.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:withdraw_required_deposit")
+async def cb_admin_withdraw_required_deposit(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await callback_admin_guard(callback):
+        return
+    current = await db.get_setting_float("withdraw_required_deposit", 0.0)
+    await state.set_state(UserStates.admin_withdraw_required_deposit)
+    await callback.message.answer(
+        f"Текущая настройка: <b>{fmt_amount(current)} {config.bot_asset}</b>.\n"
+        "Введите сумму обязательного депозита для вывода или <code>off</code>, если депозит не нужен."
+    )
     await callback.answer()
 
 
@@ -1602,6 +1888,7 @@ async def state_deposit_amount(message: Message, state: FSMContext) -> None:
 @router.message(UserStates.withdraw_amount)
 async def state_withdraw_amount(message: Message, state: FSMContext) -> None:
     minimum = await db.get_setting_float("min_withdraw_amount", config.min_withdraw_amount)
+    required_deposit = await db.get_setting_float("withdraw_required_deposit", 0.0)
     user = await db.get_user(message.from_user.id)
     try:
         amount = parse_amount(message.text)
@@ -1613,6 +1900,12 @@ async def state_withdraw_amount(message: Message, state: FSMContext) -> None:
         return
     if not user or float(user["balance"]) < amount:
         await message.answer("Недостаточно средств на балансе.")
+        return
+    if required_deposit > 0 and float(user["total_deposit"]) < required_deposit:
+        await message.answer(
+            f"Для вывода нужен суммарный депозит минимум <b>{fmt_amount(required_deposit)} {config.bot_asset}</b>.\n"
+            f"Сейчас у вас пополнено: <b>{fmt_amount(float(user['total_deposit']))} {config.bot_asset}</b>."
+        )
         return
     auto_enabled = await db.get_setting("withdraw_auto_enabled", "1")
     if auto_enabled == "1":
@@ -1685,6 +1978,48 @@ async def state_withdraw_amount(message: Message, state: FSMContext) -> None:
             reply_markup=withdraw_request_keyboard(request_id),
         )
     await state.clear()
+
+
+@router.message(UserStates.bet_product_amount)
+async def state_bet_product_amount(message: Message, state: FSMContext) -> None:
+    await process_stake_bet(
+        message,
+        state,
+        minimum=await get_min_bet_amount(),
+        title="Куб x4.5",
+        multiplier=4.5,
+        tx_code="product",
+        win_checker=lambda first, second: first * second > 18,
+        details_builder=lambda first, second: f"{first} × {second} = {first * second} > 18",
+    )
+
+
+@router.message(UserStates.bet_double_odd_amount)
+async def state_bet_double_odd_amount(message: Message, state: FSMContext) -> None:
+    await process_stake_bet(
+        message,
+        state,
+        minimum=await get_min_bet_amount(),
+        title="Куб x3 • оба нечёт",
+        multiplier=3.0,
+        tx_code="double_odd",
+        win_checker=lambda first, second: first % 2 == 1 and second % 2 == 1,
+        details_builder=lambda first, second: f"{first} и {second} — оба нечётные" if first % 2 == 1 and second % 2 == 1 else f"{first} и {second} — условие не выполнено",
+    )
+
+
+@router.message(UserStates.bet_double_even_amount)
+async def state_bet_double_even_amount(message: Message, state: FSMContext) -> None:
+    await process_stake_bet(
+        message,
+        state,
+        minimum=await get_min_bet_amount(),
+        title="Куб x3 • оба чёт",
+        multiplier=3.0,
+        tx_code="double_even",
+        win_checker=lambda first, second: first % 2 == 0 and second % 2 == 0,
+        details_builder=lambda first, second: f"{first} и {second} — оба чётные" if first % 2 == 0 and second % 2 == 0 else f"{first} и {second} — условие не выполнено",
+    )
 
 
 @router.message(UserStates.room_amount)
@@ -1909,19 +2244,20 @@ async def state_admin_house_commission(message: Message, state: FSMContext) -> N
 async def state_admin_broadcast(message: Message, state: FSMContext) -> None:
     if not await admin_guard(message):
         return
-    text = (message.text or "").strip()
-    if not text:
-        await message.answer("Отправьте текст рассылки одним сообщением.")
+    if not any([message.text, message.photo, message.caption, message.sticker, message.animation, message.video, message.document]):
+        await message.answer("Отправьте сообщение, фото или другой контент для рассылки.")
         return
     user_ids = await db.list_user_ids()
     sent = 0
     failed = 0
     for user_id in user_ids:
         try:
-            await message.bot.send_message(user_id, f"📣 <b>Рассылка</b>\n\n{text}")
+            await send_broadcast_payload(message.bot, user_id, message)
             sent += 1
         except Exception:
             failed += 1
+    preview = (message.text or message.caption or "").strip()
+    preview_line = f"\n📝 Превью: <b>{html.escape(preview[:120])}</b>" if preview else "\n📝 Превью: <b>без текста</b>"
     await message.answer(
         "📣 <b>Рассылка завершена</b>\n\n"
         f"✅ Доставлено: <b>{sent}</b>\n"
@@ -1932,7 +2268,8 @@ async def state_admin_broadcast(message: Message, state: FSMContext) -> None:
         "📣 <b>Админ-рассылка</b>\n"
         f"👮 Админ: <code>{message.from_user.id}</code>\n"
         f"✅ Доставлено: <b>{sent}</b>\n"
-        f"❌ Ошибок: <b>{failed}</b>",
+        f"❌ Ошибок: <b>{failed}</b>"
+        f"{preview_line}",
     )
     await state.clear()
 
@@ -1940,6 +2277,11 @@ async def state_admin_broadcast(message: Message, state: FSMContext) -> None:
 @router.message(UserStates.admin_min_room)
 async def state_admin_min_room(message: Message, state: FSMContext) -> None:
     await apply_setting_amount(message, state, "min_room_amount", "Минимальная сумма комнаты")
+
+
+@router.message(UserStates.admin_min_bet)
+async def state_admin_min_bet(message: Message, state: FSMContext) -> None:
+    await apply_setting_amount(message, state, "min_bet_amount", "Минимальная сумма ставок")
 
 
 @router.message(UserStates.admin_min_deposit)
@@ -1950,6 +2292,31 @@ async def state_admin_min_deposit(message: Message, state: FSMContext) -> None:
 @router.message(UserStates.admin_min_withdraw)
 async def state_admin_min_withdraw(message: Message, state: FSMContext) -> None:
     await apply_setting_amount(message, state, "min_withdraw_amount", "Минимальная сумма вывода")
+
+
+@router.message(UserStates.admin_withdraw_required_deposit)
+async def state_admin_withdraw_required_deposit(message: Message, state: FSMContext) -> None:
+    if not await admin_guard(message):
+        return
+    raw = (message.text or "").strip()
+    if raw.lower() == "off":
+        await db.set_setting("withdraw_required_deposit", "0")
+        await message.answer("Вывод без обязательного депозита включен.")
+        await send_log(message.bot, f"⚙️ Депозит для вывода: <b>не требуется</b> админом <code>{message.from_user.id}</code>")
+        await state.clear()
+        return
+    try:
+        amount = parse_amount(raw)
+    except Exception:
+        await message.answer("Введите корректную сумму или <code>off</code>.")
+        return
+    await db.set_setting("withdraw_required_deposit", fmt_amount(amount))
+    await message.answer(f"Для вывода теперь нужен депозит: <b>{fmt_amount(amount)} {config.bot_asset}</b>")
+    await send_log(
+        message.bot,
+        f"⚙️ Депозит для вывода: <b>{fmt_amount(amount)} {config.bot_asset}</b> админом <code>{message.from_user.id}</code>",
+    )
+    await state.clear()
 
 
 @router.message(UserStates.admin_ref_percent)
@@ -2077,6 +2444,7 @@ async def on_startup(bot: Bot) -> None:
     commands = [
         BotCommand(command="start", description="Открыть главное меню"),
         BotCommand(command="cancel", description="Отменить текущее действие"),
+        BotCommand(command="stats", description="Ваша статистика"),
     ]
     await bot.set_my_commands(commands)
 
