@@ -299,8 +299,10 @@ class Database:
             self._ensure_column("withdrawals", "processed_at", "TEXT")
             defaults = {
                 "min_room_amount": fmt_amount(self.config.min_room_amount),
+                "min_bet_amount": fmt_amount(self.config.min_room_amount),
                 "min_deposit_amount": fmt_amount(self.config.min_deposit_amount),
                 "min_withdraw_amount": fmt_amount(self.config.min_withdraw_amount),
+                "withdraw_required_deposit": "0",
                 "house_commission_percent": fmt_amount(self.config.house_commission_percent),
                 "referral_percent": fmt_amount(self.config.referral_percent),
                 "withdraw_auto_enabled": "1",
@@ -507,6 +509,53 @@ class Database:
 
     async def subtract_balance(self, user_id: int, amount: float, tx_type: str, meta: str) -> sqlite3.Row:
         return await self._change_balance(user_id, -abs(amount), tx_type, meta)
+
+    async def settle_stake_bet(
+        self,
+        user_id: int,
+        amount: float,
+        payout: float,
+        tx_type: str,
+        meta: str,
+    ) -> sqlite3.Row:
+        async with self.lock:
+            user = self.conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+            if not user:
+                raise ValueError("User not found")
+            if float(user["balance"]) < amount:
+                raise ValueError("Insufficient balance")
+
+            delta = round(payout - amount, 8)
+            total_win_delta = round(payout, 8) if payout > 0 else 0.0
+            total_wager_delta = round(amount, 8)
+            new_balance = round(float(user["balance"]) + delta, 8)
+            if new_balance < -1e-9:
+                raise ValueError("Insufficient balance")
+
+            self.conn.execute(
+                """
+                UPDATE users
+                SET balance = ?,
+                    total_win = total_win + ?,
+                    total_wager = total_wager + ?,
+                    promo_wager_remaining = MAX(promo_wager_remaining - ?, 0)
+                WHERE user_id = ?
+                """,
+                (
+                    new_balance,
+                    total_win_delta,
+                    total_wager_delta,
+                    total_wager_delta,
+                    user_id,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO transactions(user_id, type, amount, meta, created_at) VALUES(?, ?, ?, ?, ?)",
+                (user_id, tx_type, delta, meta, now_iso()),
+            )
+            updated = self.conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+            self.conn.commit()
+        return updated
 
     async def create_invoice(self, invoice_id: str, user_id: int, amount: float, asset: str, pay_url: str, payload: str) -> None:
         async with self.lock:
