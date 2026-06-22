@@ -278,7 +278,6 @@ def game_menu_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Создать комнату", callback_data="room:create", icon_custom_emoji_id=premium_button_icon("create_room_button"))
     builder.button(text="Список комнат", callback_data="rooms:list", icon_custom_emoji_id=premium_button_icon("rooms_button"))
     builder.button(text="Мои комнаты", callback_data="rooms:mine", icon_custom_emoji_id=premium_button_icon("my_rooms_button"))
-    builder.button(text="Ставки", callback_data="bets:open", icon_custom_emoji_id=premium_button_icon("bets_button"))
     builder.adjust(1)
     return builder.as_markup()
 
@@ -311,7 +310,9 @@ def profile_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Вывести", callback_data="profile:withdraw", icon_custom_emoji_id=premium_button_icon("withdraw_button"))
     builder.button(text="Рефералы", callback_data="profile:referrals", icon_custom_emoji_id=premium_button_icon("refs_button"))
     builder.button(text="Статистика", callback_data="profile:stats", icon_custom_emoji_id=premium_button_icon("stats_title"))
-    builder.adjust(2, 2)
+    builder.button(text="Бонусы", callback_data="profile:bonuses", icon_custom_emoji_id=premium_button_icon("win"))
+    builder.button(text="FAQ", callback_data="profile:faq", icon_custom_emoji_id=premium_button_icon("log"))
+    builder.adjust(2, 2, 2)
     return builder.as_markup()
 
 
@@ -360,7 +361,6 @@ def admin_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Рассылка", callback_data="admin:broadcast", icon_custom_emoji_id=premium_button_icon("log"))
     builder.button(text="Топ рефов", callback_data="admin:refs_top", icon_custom_emoji_id=premium_button_icon("win"))
     builder.button(text="Мин. ставка комнаты", callback_data="admin:min_room", icon_custom_emoji_id=premium_button_icon("main_menu"))
-    builder.button(text="Мин. ставка ставок", callback_data="admin:min_bet", icon_custom_emoji_id=premium_button_icon("bets_button"))
     builder.button(text="Мин. пополнение", callback_data="admin:min_deposit", icon_custom_emoji_id=premium_button_icon("deposit"))
     builder.button(text="Мин. вывод", callback_data="admin:min_withdraw", icon_custom_emoji_id=premium_button_icon("withdraw"))
     builder.button(text="Депозит для вывода", callback_data="admin:withdraw_required_deposit", icon_custom_emoji_id=premium_button_icon("deposit"))
@@ -460,6 +460,24 @@ async def render_user_stats(user_id: int) -> str:
     )
 
 
+def render_bonuses_text() -> str:
+    return (
+        f"{premium_emoji('win', '🎁')} <b>Бонусы</b>\n\n"
+        f"{premium_emoji('deposit', '💳')} В боте доступны бездепозитные и депозитные бонусы.\n"
+        f"{premium_emoji('profile_balance', '💰')} Бонусные средства можно использовать для игры и разгона баланса.\n"
+        f"{premium_emoji('log', '🧾')} По лимитам вывода и условиям откройте раздел <b>FAQ</b>."
+    )
+
+
+def render_bonus_faq_text() -> str:
+    return (
+        f"{premium_emoji('log', '🧾')} <b>FAQ по бонусам</b>\n\n"
+        f"{premium_emoji('withdraw', '💸')} Максимальный вывод с <b>бездепозитного бонуса</b>: <b>0.3$</b>\n"
+        f"{premium_emoji('deposit', '💳')} Максимальный вывод с <b>депозитного бонуса</b>: <b>3.5$</b>\n\n"
+        f"{premium_emoji('win', '🏆')} Выполняйте условия бонуса, играйте и выводите прибыль в пределах лимита."
+    )
+
+
 async def show_main_menu(message: Message) -> None:
     is_admin = await db.is_admin(message.from_user.id)
     text = (
@@ -484,7 +502,6 @@ async def show_game_menu(target: Message | CallbackQuery) -> None:
     text = (
         f"{premium_emoji('game_menu_title', '🎲')} <b>Игровое меню</b>\n\n"
         f"{premium_emoji('main_menu', '🔥')} Создавайте комнаты, заходите в чужие и играйте на реальные кубики Telegram.\n"
-        f"{premium_emoji('bets_button', '🎯')} Откройте раздел ставок и запускайте быстрые игры на двух кубах.\n"
         f"{premium_emoji('log', '💼')} Комиссия проекта: <b>{fmt_amount(await db.get_setting_float('house_commission_percent', config.house_commission_percent))}%</b>."
     )
     if isinstance(target, CallbackQuery):
@@ -527,7 +544,7 @@ async def show_admin_panel(target: Message | CallbackQuery) -> None:
     text = (
         "🛡 <b>Админ-панель</b>\n\n"
         f"👮 Администраторов: <b>{len(admins)}</b>\n"
-        "⚙️ Управление чеками, лимитами, ставками, админами, балансами, подпиской и логами."
+        "⚙️ Управление чеками, лимитами, админами, балансами, подпиской и логами."
     )
     if isinstance(target, CallbackQuery):
         await safe_edit(target.message, text, reply_markup=admin_keyboard())
@@ -813,16 +830,6 @@ async def process_stake_bet(
 
 
 async def send_broadcast_payload(bot: Bot, user_id: int, source_message: Message) -> None:
-    if source_message.text:
-        await bot.send_message(user_id, source_message.text)
-        return
-    if source_message.photo:
-        await bot.send_photo(
-            user_id,
-            source_message.photo[-1].file_id,
-            caption=source_message.caption or None,
-        )
-        return
     await bot.copy_message(user_id, source_message.chat.id, source_message.message_id)
 
 
@@ -1223,46 +1230,29 @@ async def cb_open_game(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "bets:open")
 async def cb_open_bets(callback: CallbackQuery) -> None:
-    await show_bets_menu(callback)
+    await show_game_menu(callback)
+    await callback.answer("Раздел ставок отключен.", show_alert=False)
 
 
 @router.callback_query(F.data == "bet:product")
 async def cb_bet_product(callback: CallbackQuery, state: FSMContext) -> None:
-    minimum = await get_min_bet_amount()
-    await state.set_state(UserStates.bet_product_amount)
-    await callback.message.answer(
-        f"{premium_emoji('bets_button', '🎯')} <b>Куб x4.5</b>\n\n"
-        "Условие победы: произведение двух кубиков должно быть больше <b>18</b>.\n"
-        f"Минимальная ставка: <b>{fmt_amount(minimum)} {config.bot_asset}</b>\n"
-        "Отправьте сумму одним сообщением."
-    )
-    await callback.answer()
+    await state.clear()
+    await show_game_menu(callback)
+    await callback.answer("Раздел ставок отключен.", show_alert=False)
 
 
 @router.callback_query(F.data == "bet:double_odd")
 async def cb_bet_double_odd(callback: CallbackQuery, state: FSMContext) -> None:
-    minimum = await get_min_bet_amount()
-    await state.set_state(UserStates.bet_double_odd_amount)
-    await callback.message.answer(
-        f"{premium_emoji('bets_button', '🎯')} <b>Куб x3 • оба нечёт</b>\n\n"
-        "Победа, если оба кубика выпадут нечётными.\n"
-        f"Минимальная ставка: <b>{fmt_amount(minimum)} {config.bot_asset}</b>\n"
-        "Отправьте сумму одним сообщением."
-    )
-    await callback.answer()
+    await state.clear()
+    await show_game_menu(callback)
+    await callback.answer("Раздел ставок отключен.", show_alert=False)
 
 
 @router.callback_query(F.data == "bet:double_even")
 async def cb_bet_double_even(callback: CallbackQuery, state: FSMContext) -> None:
-    minimum = await get_min_bet_amount()
-    await state.set_state(UserStates.bet_double_even_amount)
-    await callback.message.answer(
-        f"{premium_emoji('bets_button', '🎯')} <b>Куб x3 • оба чёт</b>\n\n"
-        "Победа, если оба кубика выпадут чётными.\n"
-        f"Минимальная ставка: <b>{fmt_amount(minimum)} {config.bot_asset}</b>\n"
-        "Отправьте сумму одним сообщением."
-    )
-    await callback.answer()
+    await state.clear()
+    await show_game_menu(callback)
+    await callback.answer("Раздел ставок отключен.", show_alert=False)
 
 
 @router.callback_query(F.data == "profile:open")
@@ -1274,6 +1264,18 @@ async def cb_open_profile(callback: CallbackQuery) -> None:
 async def cb_profile_stats(callback: CallbackQuery) -> None:
     text = await render_user_stats(callback.from_user.id)
     await safe_edit(callback.message, text, reply_markup=profile_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:bonuses")
+async def cb_profile_bonuses(callback: CallbackQuery) -> None:
+    await safe_edit(callback.message, render_bonuses_text(), reply_markup=profile_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "profile:faq")
+async def cb_profile_faq(callback: CallbackQuery) -> None:
+    await safe_edit(callback.message, render_bonus_faq_text(), reply_markup=profile_keyboard())
     await callback.answer()
 
 
